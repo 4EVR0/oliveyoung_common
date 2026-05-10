@@ -45,3 +45,24 @@ INCI_GOLD_PREFIX = "INCI_data_gold/kcia_cosing"
 GRAPHRAG_BRONZE_PREFIX = "graphrag/bronze/pubmed"
 GRAPHRAG_SILVER_PREFIX = "graphrag/silver/paper"
 GRAPHRAG_GOLD_PREFIX = "graphrag/gold/claim"
+
+
+# Neo4j Graph DB import용 CSV (Iceberg 비관리)
+# 모든 파이프라인이 같은 prefix 아래에 적재한다.
+NEO4J_CSV_PREFIX = "gold/neo4j"
+
+
+def neo4j_csv_prefix(pipeline: str, kind: str, name: str, run_id: str) -> str:
+    """Neo4j CSV용 S3 key prefix를 반환합니다.
+
+    Args:
+        pipeline: 파이프라인 식별자. 예: "oliveyoung", "inci"
+        kind:     "nodes" 또는 "rels"
+        name:     Neo4j 라벨 또는 관계 타입 (원본 케이스 유지).
+                  예: "Product", "PRODUCT_HAS_INGREDIENT"
+        run_id:   build_run_id() 결과 문자열
+
+    Returns:
+        예: "gold/neo4j/oliveyoung/nodes/Product/oliveyoung_neo4j_20260510_120000"
+    """
+    return f"{NEO4J_CSV_PREFIX}/{pipeline}/{kind}/{name}/{run_id}"
