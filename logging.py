@@ -187,6 +187,26 @@ def log_process_summary(
     )
 
 
+def log_dq(
+    logger: logging.Logger,
+    stage: str,
+    batch_job: Optional[str] = None,
+    run_id: Optional[str] = None,
+    **metrics: Any,
+) -> None:
+    """파이프라인 단계의 정합성 수치를 [DQ] 이벤트 한 줄로 기록한다.
+
+    metrics에 넘긴 숫자(행수·매핑률 등)는 LOG_FORMAT=json일 때 JSON 필드가 되어,
+    Loki에서 `| json | unwrap match_rate` 처럼 정규식 없이 바로 읽을 수 있다.
+    batch_job은 단계 간(crawl→silver→gold→neo4j) 대조를 위한 공통키.
+    """
+    struct = _build_struct("DQ", stage=stage, batch_job=batch_job, run_id=run_id, **metrics)
+    logger.info(
+        _format_log("DQ", stage=stage, batch_job=batch_job, run_id=run_id, **metrics),
+        extra={"structured": struct},
+    )
+
+
 def log_data_error(
     logger: logging.Logger,
     job: str,
