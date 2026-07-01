@@ -11,7 +11,7 @@ Processing, data error, and audit logs use the same key=value shape:
     [DATA_ERROR] level=ERROR job=ingredient_mapping run_id=20260506_1200 ...
     [AUDIT] run_id=20260506_1200 job_version=v1 git_commit_hash=abc123 ...
 
-Set LOG_FORMAT=json to emit JSON Lines for CloudWatch Insights.
+Set LOG_FORMAT=json: 구조화 이벤트는 JSON 한 줄, 일반 메시지는 평문으로 출력.
 Set LOG_LEVEL to control verbosity (default: INFO).
 """
 
@@ -28,42 +28,38 @@ from typing import Any, Iterator, Optional
 
 
 class JsonFormatter(logging.Formatter):
-    """Formats log records as single-line JSON for CloudWatch Insights."""
+    """구조화 이벤트는 컴팩트 JSON, 일반 메시지는 평문으로 출력.
+
+    시각·레벨은 Airflow/Loki가 이미 붙이므로 줄에 다시 넣지 않는다(중복 제거).
+    """
 
     def __init__(self, service: str = "4evr0") -> None:
         super().__init__()
         self._service = service
 
     def format(self, record: logging.LogRecord) -> str:
-        dt = datetime.fromtimestamp(record.created, tz=timezone.utc)
-        ms = int(record.msecs)
-        timestamp = dt.strftime(f"%Y-%m-%dT%H:%M:%S.{ms:03d}Z")
-
-        obj: dict[str, Any] = {
-            "timestamp": timestamp,
-            "level": record.levelname,
-            "logger": record.name,
-            "service": self._service,
-        }
-
         structured: dict[str, Any] | None = getattr(record, "structured", None)
+
+        # 구조화 이벤트(DQ/START/END 등) → 대시보드가 읽을 컴팩트 JSON
         if structured:
-            obj.update(structured)
-        else:
-            obj["message"] = record.getMessage()
+            obj: dict[str, Any] = dict(structured)
+            if record.exc_info:
+                obj["exception"] = self.formatException(record.exc_info)
 
+            safe: dict[str, Any] = {}
+            for k, v in obj.items():
+                try:
+                    json.dumps(v)
+                    safe[k] = v
+                except (TypeError, ValueError):
+                    safe[k] = str(v)
+            return json.dumps(safe, ensure_ascii=False)
+
+        # 일반 메시지 로그 → 사람이 바로 읽는 평문
+        message = record.getMessage()
         if record.exc_info:
-            obj["exception"] = self.formatException(record.exc_info)
-
-        safe: dict[str, Any] = {}
-        for k, v in obj.items():
-            try:
-                json.dumps(v)
-                safe[k] = v
-            except (TypeError, ValueError):
-                safe[k] = str(v)
-
-        return json.dumps(safe, ensure_ascii=False)
+            message = f"{message}\n{self.formatException(record.exc_info)}"
+        return message
 
 
 def setup_logging(service_name: str = "4evr0") -> None:
