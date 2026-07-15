@@ -30,18 +30,19 @@ DQ_METRICS_TABLE = "oliveyoung_db.dq_metrics"
 
 # key/value(EAV) — 지표당 1행. 지표 추가 시 스키마 변경 불필요.
 DQ_METRICS_SCHEMA = Schema(
-    NestedField(1, "batch_job",    StringType(),      required=True),   # 단계 간 대조·드릴다운 키
-    NestedField(2, "stage",        StringType(),      required=False),  # crawl | bronze_to_silver | silver_to_gold
-    NestedField(3, "metric_name",  StringType(),      required=False),  # match_rate, error_rate, bronze_loaded ...
-    NestedField(4, "metric_value", DoubleType(),      required=False),  # 카운트도 double(5282.0), 비율도 double
-    NestedField(5, "target_table", StringType(),      required=False),  # 드릴다운 대상 테이블(없으면 null)
-    NestedField(6, "created_at",   TimestamptzType(), required=False),
+    NestedField(1, "batch_date",   StringType(),      required=True),   # YYYY-MM-DD, 단계 관통 논리 배치 날짜(조인·드릴다운 키)
+    NestedField(2, "run_id",       StringType(),      required=False),  # 초단위 유니크 실행 식별(추적용)
+    NestedField(3, "stage",        StringType(),      required=False),  # crawl | bronze_to_silver | silver_to_gold
+    NestedField(4, "metric_name",  StringType(),      required=False),  # match_rate, error_rate, bronze_loaded ...
+    NestedField(5, "metric_value", DoubleType(),      required=False),  # 카운트도 double(5282.0), 비율도 double
+    NestedField(6, "target_table", StringType(),      required=False),  # 드릴다운 대상 테이블(없으면 null)
+    NestedField(7, "created_at",   TimestamptzType(), required=False),
 )
 
 # 최신 run이 위로 오도록 created_at DESC 정렬
 DQ_METRICS_SORT = SortOrder(
     SortField(
-        source_id=6, transform=IdentityTransform(),
+        source_id=7, transform=IdentityTransform(),
         direction=SortDirection.DESC, null_order=NullOrder.NULLS_LAST,
     )
 )
@@ -71,7 +72,8 @@ def create_dq_metrics_table(catalog, location: Optional[str] = None) -> bool:
 def write_dq_metrics(
     catalog,
     stage: str,
-    batch_job: str,
+    batch_date: str,
+    run_id: str,
     target_table: Optional[str] = None,
     created_at: Optional[datetime] = None,
     **metrics: Any,
@@ -98,7 +100,8 @@ def write_dq_metrics(
     table = catalog.load_table(DQ_METRICS_TABLE)
     arrow = pa.table(
         {
-            "batch_job":    pa.array([batch_job] * n,     type=pa.string()),
+            "batch_date":   pa.array([batch_date] * n,    type=pa.string()),
+            "run_id":       pa.array([run_id] * n,        type=pa.string()),
             "stage":        pa.array([stage] * n,         type=pa.string()),
             "metric_name":  pa.array(names,               type=pa.string()),
             "metric_value": pa.array(values,              type=pa.float64()),
