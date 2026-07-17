@@ -176,7 +176,8 @@ def _send_report(webhook: str, stage: str, batch_date: str,
         body = json.dumps({"content": "\n".join(lines)}).encode("utf-8")
         req = urllib.request.Request(
             webhook, data=body,
-            headers={"Content-Type": "application/json"},
+            # UA 없으면 Discord(Cloudflare)가 기본 urllib UA를 봇으로 보고 403 차단
+            headers={"Content-Type": "application/json", "User-Agent": "oliveyoung-dq/1.0"},
             method="POST",
         )
         urllib.request.urlopen(req, timeout=5)
