@@ -146,7 +146,7 @@ _METRIC_LABELS = {
     "match_rate":            ("📊", "매칭율",     "pct"),
 }
 
-_DASHBOARD_URL = "http://43.200.169.27:3000/d/oliveyoung-dq-table"
+_DASHBOARD_URL = "http://15.165.179.181:3000/d/oliveyoung-dq-table"
 
 
 def _fmt_metric(kind: str, v: float) -> str:
