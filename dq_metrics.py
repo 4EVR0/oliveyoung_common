@@ -79,12 +79,14 @@ def write_dq_metrics(
     target_table: Optional[str] = None,
     created_at: Optional[datetime] = None,
     report_webhook: Optional[str] = None,
+    report_lines: Optional[list[str]] = None,
     **metrics: Any,
 ) -> None:
     """단계의 정합성 수치(**metrics)를 dq_metrics에 지표당 1행씩 append한다.
 
     숫자형 지표만 저장한다 — 문자열 등(예: code_version)은 로그로만 남기고 건너뛴다.
     report_webhook을 주면 append 성공 후 Discord로 완료 리포트를 보낸다(옵트인·비치명적).
+    report_lines는 리포트 본문에 덧붙일 사유 줄(예: 게이트 보류 카테고리). 테이블엔 안 들어감.
     안 주면 부수효과 없이 기존과 동일하게 동작.
     """
     ts = created_at or datetime.now(timezone.utc)
@@ -119,7 +121,7 @@ def write_dq_metrics(
 
     # 적재 성공 후에만 완료 리포트 전송(옵트인) — 실패한 배치가 "완료"로 오보되지 않게
     if report_webhook:
-        _send_report(report_webhook, stage, batch_date, names, values)
+        _send_report(report_webhook, stage, batch_date, names, values, report_lines)
 
 
 # ── 완료 리포트(Discord) ────────────────────────────────────────────────────
@@ -128,6 +130,7 @@ _STAGE_META = {
     "crawl":            ("올리브영 크롤링", "수집 완료"),
     "bronze_to_silver": ("올리브영 전처리", "정제 완료"),
     "silver_to_gold":   ("올리브영 전처리", "성분 매칭 완료"),
+    "bronze_gate":      ("올리브영 전처리", "입력 품질 게이트"),
 }
 
 # metric_name → (이모지, 라벨, 포맷). 대시보드와 통일: rate=%(percentunit), 카운트=,건.
@@ -141,6 +144,14 @@ _METRIC_LABELS = {
     "categories_partial":    ("🧩", "부분 수집",   "count"),
     "categories_zero":       ("🕳️", "빈 카테고리",  "count"),
     "crawl_attempt":         ("🔁", "시도",       "times"),
+    "gate_status":                 ("🚦", "판정",          "verdict"),
+    "categories_partial_input":    ("🧩", "부분 수집 입력",  "count"),
+    "categories_missing":          ("📭", "누락",          "count"),
+    "categories_stale":            ("⏳", "연속 누락",      "count"),
+    "categories_low_coverage":     ("📉", "수집률 미달",    "count"),
+    "categories_unverified":       ("❓", "판별 불가",      "count"),
+    "invalid_run_ids":             ("🚫", "비정상 run_id", "count"),
+    "categories_untargeted_input": ("🗂️", "대상 외 입력",   "count"),
     "bronze_loaded":         ("📥", "bronze 로드", "count"),
     "silver_ok":             ("✅", "정상",       "count"),
     "silver_error":          ("⚠️", "에러",       "count"),
@@ -154,30 +165,45 @@ _METRIC_LABELS = {
 _DASHBOARD_URL = "http://15.165.179.181:3000/d/oliveyoung-dq-table"
 
 
+# 게이트 판정(gate_status) → (표기, 리포트 머리 아이콘)
+_VERDICTS = {0: ("통과", "✅"), 1: ("경고", "⚠️"), 2: ("보류", "⛔"), 3: ("우회 진행", "⏭️")}
+
+
 def _fmt_metric(kind: str, v: float) -> str:
-    """리포트용 값 포맷 — rate는 %, 횟수는 N회, 정수 카운트는 천단위+건."""
+    """리포트용 값 포맷 — rate는 %, 횟수는 N회, 판정은 통과/경고/보류, 정수 카운트는 천단위+건."""
     if kind == "pct":
         return f"{v * 100:.1f}%"
     if kind == "times":
         return f"{int(v)}회"
+    if kind == "verdict":
+        return _VERDICTS.get(int(v), (f"{v:g}", ""))[0]
     if v == int(v):
         return f"{int(v):,}건"
     return f"{v:g}"
 
 
 def _send_report(webhook: str, stage: str, batch_date: str,
-                 names: list[str], values: list[float]) -> None:
+                 names: list[str], values: list[float],
+                 extra_lines: Optional[list[str]] = None) -> None:
     """단계 완료 리포트를 Discord 웹훅으로 전송한다(실패해도 조용히 무시)."""
     try:
         pipeline, action = _STAGE_META.get(stage, (stage, "완료"))
+        # 게이트 리포트는 판정에 따라 머리 아이콘을 바꾼다(보류인데 ✅로 보이지 않게)
+        icon = "✅"
+        if "gate_status" in names:
+            icon = _VERDICTS.get(int(values[names.index("gate_status")]), ("", "✅"))[1]
         lines = [
-            f"✅ **[{pipeline}] {action}**",
+            f"{icon} **[{pipeline}] {action}**",
             "━" * 20,
             f"📅 배치   {batch_date}",
         ]
         for name, value in zip(names, values):
+            # 게이트 리포트는 0인 사유 수치를 숨긴다(평소엔 판정 한 줄, 문제 있을 때만 길게)
+            if stage == "bronze_gate" and name != "gate_status" and value == 0:
+                continue
             emoji, label, kind = _METRIC_LABELS.get(name, ("•", name, "count"))
             lines.append(f"{emoji} {label}   {_fmt_metric(kind, value)}")
+        lines.extend(extra_lines or [])
         lines.append(f"🔗 [대시보드]({_DASHBOARD_URL})")
 
         body = json.dumps({"content": "\n".join(lines)}).encode("utf-8")
