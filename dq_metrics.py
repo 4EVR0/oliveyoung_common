@@ -133,9 +133,14 @@ _STAGE_META = {
 # metric_name → (이모지, 라벨, 포맷). 대시보드와 통일: rate=%(percentunit), 카운트=,건.
 _METRIC_LABELS = {
     "products_total":        ("📦", "수집 상품",   "count"),
+    "products_expected":     ("🔎", "기대 상품",   "count"),
+    "products_coverage":     ("📈", "수집률",     "pct"),
     "categories_total":      ("📂", "카테고리",    "count"),
+    "categories_completed":  ("☑️", "완료",       "count"),
     "categories_failed":     ("⚠️", "실패",       "count"),
+    "categories_partial":    ("🧩", "부분 수집",   "count"),
     "categories_zero":       ("🕳️", "빈 카테고리",  "count"),
+    "crawl_attempt":         ("🔁", "시도",       "times"),
     "bronze_loaded":         ("📥", "bronze 로드", "count"),
     "silver_ok":             ("✅", "정상",       "count"),
     "silver_error":          ("⚠️", "에러",       "count"),
@@ -150,9 +155,11 @@ _DASHBOARD_URL = "http://15.165.179.181:3000/d/oliveyoung-dq-table"
 
 
 def _fmt_metric(kind: str, v: float) -> str:
-    """리포트용 값 포맷 — rate는 %, 정수 카운트는 천단위+건."""
+    """리포트용 값 포맷 — rate는 %, 횟수는 N회, 정수 카운트는 천단위+건."""
     if kind == "pct":
         return f"{v * 100:.1f}%"
+    if kind == "times":
+        return f"{int(v)}회"
     if v == int(v):
         return f"{int(v):,}건"
     return f"{v:g}"
