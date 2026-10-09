@@ -152,6 +152,9 @@ _METRIC_LABELS = {
     "categories_unverified":       ("❓", "판별 불가",      "count"),
     "invalid_run_ids":             ("🚫", "비정상 run_id", "count"),
     "categories_untargeted_input": ("🗂️", "대상 외 입력",   "count"),
+    "categories_substituted":      ("🔁", "이전 run으로 대체", "count"),
+    "categories_unresolved":       ("⛔", "대체할 run 없음",  "count"),
+    "max_source_age_days":         ("📆", "최대 데이터 나이", "days"),
     "bronze_loaded":         ("📥", "bronze 로드", "count"),
     "silver_ok":             ("✅", "정상",       "count"),
     "silver_error":          ("⚠️", "에러",       "count"),
@@ -170,11 +173,13 @@ _VERDICTS = {0: ("통과", "✅"), 1: ("경고", "⚠️"), 2: ("보류", "⛔")
 
 
 def _fmt_metric(kind: str, v: float) -> str:
-    """리포트용 값 포맷 — rate는 %, 횟수는 N회, 판정은 통과/경고/보류, 정수 카운트는 천단위+건."""
+    """리포트용 값 포맷 — rate는 %, 횟수는 N회, 일수는 N일, 판정은 통과/경고/보류, 정수 카운트는 천단위+건."""
     if kind == "pct":
         return f"{v * 100:.1f}%"
     if kind == "times":
         return f"{int(v)}회"
+    if kind == "days":
+        return f"{int(v)}일"
     if kind == "verdict":
         return _VERDICTS.get(int(v), (f"{v:g}", ""))[0]
     if v == int(v):
