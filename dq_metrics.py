@@ -2,7 +2,7 @@
 정합성(DQ) 메트릭 테이블 계약 — 공유 모듈
 
 파이프라인 각 단계가 log_dq로 남기는 정합성 수치를 Iceberg 테이블
-(oliveyoung_db.dq_metrics)에 지표당 1행씩 append한다.
+(oliveyoung_db.dq_metrics)에 지표당 1행씩 기록한다(기본 append, replace로 재실행 멱등 교체).
 
 key/value(EAV) 형태라 지표를 추가해도 스키마를 바꿀 필요가 없다.
 log_dq(로그·Loki)와 write_dq_metrics(테이블)는 같은 kwargs를 받으므로
@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 import pyarrow as pa
+from pyiceberg.expressions import And, EqualTo, NotEqualTo
 from pyiceberg.schema import Schema
 from pyiceberg.types import NestedField, StringType, DoubleType, TimestamptzType
 from pyiceberg.table.sorting import SortOrder, SortField, SortDirection, NullOrder
@@ -80,15 +81,25 @@ def write_dq_metrics(
     created_at: Optional[datetime] = None,
     report_webhook: Optional[str] = None,
     report_lines: Optional[list[str]] = None,
+    replace: Optional[str] = None,
     **metrics: Any,
-) -> None:
-    """단계의 정합성 수치(**metrics)를 dq_metrics에 지표당 1행씩 append한다.
+) -> int:
+    """단계의 정합성 수치(**metrics)를 dq_metrics에 지표당 1행씩 기록한다.
 
     숫자형 지표만 저장한다 — 문자열 등(예: code_version)은 로그로만 남기고 건너뛴다.
-    report_webhook을 주면 append 성공 후 Discord로 완료 리포트를 보낸다(옵트인·비치명적).
+    report_webhook을 주면 적재 성공 후 Discord로 완료 리포트를 보낸다(옵트인·비치명적).
     report_lines는 리포트 본문에 덧붙일 사유 줄(예: 게이트 보류 카테고리). 테이블엔 안 들어감.
-    안 주면 부수효과 없이 기존과 동일하게 동작.
+
+    replace — 재실행 멱등용. 같은 stage·batch_date의 기존 행을 지우고 쓴다(조건부 overwrite).
+      None(기본)    : append. 크롤 등 기존 동작 그대로.
+      "other_runs"  : 다른 run_id 행을 지운다. 정상 실행용 — 실행마다 run_id가 달라
+                      같은 실행 안의 여러 호출(요약·유형별)은 서로 지우지 않는다.
+      "same_run"    : 같은 run_id 행을 지운다. 백필처럼 run_id가 고정된 키용.
+    지운 행이 있으면 리포트 제목에 "(재실행)"을 붙인다.
+    Returns: 교체로 지운 행 수(append면 0).
     """
+    if replace not in (None, "other_runs", "same_run"):
+        raise ValueError(f"replace는 None|'other_runs'|'same_run': {replace!r}")
     ts = created_at or datetime.now(timezone.utc)
 
     names: list[str] = []
@@ -101,7 +112,7 @@ def write_dq_metrics(
         values.append(float(value))
 
     if not names:
-        return
+        return 0
 
     n = len(names)
     table = catalog.load_table(DQ_METRICS_TABLE)
@@ -117,11 +128,22 @@ def write_dq_metrics(
         },
         schema=table.schema().as_arrow(),
     )
-    table.append(arrow)
+    replaced = 0
+    if replace is not None:
+        run_cond = NotEqualTo("run_id", run_id) if replace == "other_runs" else EqualTo("run_id", run_id)
+        selector = And(And(EqualTo("stage", stage), EqualTo("batch_date", batch_date)), run_cond)
+        # 지울 행 수를 먼저 센다 — "(재실행)" 표시용. 0이면 그냥 append(빈 delete 경고 방지)
+        replaced = table.scan(row_filter=selector, selected_fields=("run_id",)).to_arrow().num_rows
+    if replaced:
+        table.overwrite(arrow, overwrite_filter=selector)
+    else:
+        table.append(arrow)
 
     # 적재 성공 후에만 완료 리포트 전송(옵트인) — 실패한 배치가 "완료"로 오보되지 않게
     if report_webhook:
-        _send_report(report_webhook, stage, batch_date, names, values, report_lines)
+        _send_report(report_webhook, stage, batch_date, names, values, report_lines,
+                     rerun=replaced > 0)
+    return replaced
 
 
 # ── 완료 리포트(Discord) ────────────────────────────────────────────────────
@@ -189,7 +211,8 @@ def _fmt_metric(kind: str, v: float) -> str:
 
 def _send_report(webhook: str, stage: str, batch_date: str,
                  names: list[str], values: list[float],
-                 extra_lines: Optional[list[str]] = None) -> None:
+                 extra_lines: Optional[list[str]] = None,
+                 rerun: bool = False) -> None:
     """단계 완료 리포트를 Discord 웹훅으로 전송한다(실패해도 조용히 무시)."""
     try:
         pipeline, action = _STAGE_META.get(stage, (stage, "완료"))
@@ -197,8 +220,10 @@ def _send_report(webhook: str, stage: str, batch_date: str,
         icon = "✅"
         if "gate_status" in names:
             icon = _VERDICTS.get(int(values[names.index("gate_status")]), ("", "✅"))[1]
+        # 같은 배치의 기존 기록을 교체했으면 재실행임을 제목에 남긴다(운영 일지 신호)
+        suffix = " (재실행)" if rerun else ""
         lines = [
-            f"{icon} **[{pipeline}] {action}**",
+            f"{icon} **[{pipeline}] {action}{suffix}**",
             "━" * 20,
             f"📅 배치   {batch_date}",
         ]
